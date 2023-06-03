@@ -1,9 +1,10 @@
-use crate::instructions::{self, Instruction};
+use crate::instructions::*;
 use enumflags2::{bitflags, BitFlags};
 
 #[bitflags]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
+#[allow(non_camel_case_types)]
 pub enum State {
     NEGATIVE = 0b1000_0000,
     OVERFLOW = 0b0100_0000,
@@ -15,14 +16,19 @@ pub enum State {
     CARRY = 0b0000_0001,
 }
 
+const INIT_PTR_LOC: usize = 0x8000;
+
+type MemAddr = u16;
+
 pub struct CPU {
     pub acc: u8,
     pub rxi: u8,
     pub ryi: u8,
     pub flags: BitFlags<State>,
     //from bit 7 to bit 0 these are the negative (N), overflow (V), reserved, break (B), decimal (D), interrupt disable (I), zero (Z) and carry (C) flag
-    pub stack_p: u8,
-    pub inst_p: u16,
+    pub stack_ptr: u8,
+    pub instr_ptr: MemAddr,
+    pub mem: [u8; 0xFFFF],
 }
 
 impl CPU {
@@ -32,32 +38,82 @@ impl CPU {
             rxi: 0,
             ryi: 0,
             flags: BitFlags::default(),
-            stack_p: 0,
-            inst_p: 0,
+            stack_ptr: 0,
+            instr_ptr: 0, // maybe replace with std::io::Cursor?
+            mem: [0; 0xFFFF],
         }
     }
 
-    pub fn interpret(&mut self, program: Vec<u8>) {
-        self.inst_p = 0;
+    pub fn load(&mut self, program: Vec<u8>) {
+        self.mem[INIT_PTR_LOC..INIT_PTR_LOC + program.len()].copy_from_slice(&program[..]);
+        self.instr_ptr = INIT_PTR_LOC as MemAddr;
+    }
 
+    fn read_u8(&self, addr: MemAddr) -> u8 {
+        self.mem[addr as usize]
+    }
+
+    fn read_u16(&self, addr: MemAddr) -> u16 {
+        let addr = addr as usize;
+        let addr_plus_1: usize;
+
+        if addr < u16::MAX as usize {
+            addr_plus_1 = 0;
+        } else {
+            addr_plus_1 = addr + 1;
+        }
+
+        u16::from_le_bytes([self.mem[addr], self.mem[addr_plus_1]])
+    }
+
+    fn write_u8(&mut self, addr: MemAddr, data: u8) {
+        self.mem[addr as usize] = data;
+    }
+
+    fn write_u16(&mut self, addr: MemAddr, data: u16) {
+        let addr = addr as usize;
+        self.mem[addr] = (data >> 8) as u8;
+        self.mem[addr] = (data & 0x00FF) as u8;
+    }
+
+    fn get_operand_address(&self, mode: &AddressingMode) -> MemAddr {
+        use AddressingMode::*;
+        match mode {
+            Immediate => self.instr_ptr,
+            ZeroPage => self.read_u8(self.instr_ptr) as u16,
+            ZeroPage_X => (self.read_u8(self.instr_ptr).wrapping_add(self.rxi)) as u16,
+            Absolute => self.read_u16(self.instr_ptr),
+            Absolute_X => self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16),
+            Absolute_Y => self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16),
+            Indirect_X => {
+                let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16);
+                self.read_u16(ptr)
+            }
+            Indirect_Y => {
+                let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16);
+                self.read_u16(ptr)
+            }
+            _ => panic!("Addressing Mode {:?} is not valid", mode),
+        }
+    }
+
+    pub fn run(&mut self) {
         loop {
-            let opcode = program[self.inst_p as usize];
-            self.inst_p += 1;
+            let opcode = self.read_u8(self.instr_ptr);
+            self.instr_ptr += 1;
 
             match Instruction::try_from(opcode).unwrap() {
                 Instruction::BRK => return,
                 Instruction::LDA => {
-                    self.acc = program[self.inst_p as usize];
-                    self.inst_p += 1;
-
-                    self.set_zero(self.acc);
-                    self.set_negative(self.acc);
+                    self.acc = self.mem[self.instr_ptr as usize];
+                    self.instr_ptr += 1;
+                    self.lda(self.acc);
                 }
                 Instruction::TAX => {
-                    self.rxi = self.acc;
-
-                    self.set_zero(self.rxi);
-                    self.set_negative(self.rxi);
+                    self.tax();
+                }
+                Instruction::INX => {
+                    self.inx();
                 }
             }
         }
@@ -77,5 +133,22 @@ impl CPU {
         } else {
             self.flags.remove(State::NEGATIVE);
         }
+    }
+
+    fn lda(&mut self, mode: AddressingMode) {
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    fn tax(&mut self) {
+        self.rxi = self.acc;
+        self.set_zero(self.rxi);
+        self.set_negative(self.rxi);
+    }
+
+    fn inx(&mut self) {
+        self.rxi = self.rxi.wrapping_add(1);
+        self.set_zero(self.rxi);
+        self.set_negative(self.rxi);
     }
 }
