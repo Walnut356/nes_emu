@@ -19,6 +19,8 @@ pub enum State {
 }
 
 const INIT_PTR_LOC: usize = 0x8000;
+const STACK_OFFSET: usize = 0x01FF;
+const STACK_MIN: usize = 0x0100;
 
 type MemAddr = u16;
 
@@ -40,7 +42,7 @@ impl CPU {
             rxi: 0,
             ryi: 0,
             flags: BitFlags::default(),
-            stack_ptr: 0,
+            stack_ptr: 255,
             instr_ptr: 0, // maybe replace with std::io::Cursor?
             mem: [0; 0xFFFF],
         }
@@ -127,35 +129,57 @@ impl CPU {
                 Instruction::BRK => return,
                 Instruction::BVC => todo!(),
                 Instruction::BVS => todo!(),
-                Instruction::CLC => todo!(),
-                Instruction::CLD => todo!(),
-                Instruction::CLI => todo!(),
-                Instruction::CLV => todo!(),
+                Instruction::CLC => {
+                    self.flags.remove(State::CARRY);
+                }
+                Instruction::CLD => {
+                    // this should be a NOP for actual NES games
+                    self.flags.remove(State::RESERVED);
+                }
+                Instruction::CLI => {
+                    self.flags.remove(State::INTERRUPT_DISABLE);
+                }
+                Instruction::CLV => {
+                    self.flags.remove(State::OVERFLOW);
+                }
                 Instruction::CMP => todo!(),
                 Instruction::CPX => todo!(),
                 Instruction::CPY => todo!(),
                 Instruction::DEC => todo!(),
-                Instruction::DEX => todo!(),
-                Instruction::DEY => todo!(),
+                Instruction::DEX => {
+                    self.rxi = self.rxi.wrapping_sub(1);
+                    self.set_zero(self.rxi);
+                    self.set_negative(self.rxi);
+                }
+                Instruction::DEY => {
+                    self.ryi = self.ryi.wrapping_sub(1);
+                    self.set_zero(self.ryi);
+                    self.set_negative(self.ryi);
+                }
                 Instruction::EOR => todo!(),
                 Instruction::INC => todo!(),
                 Instruction::INX => {
-                    self.inx();
+                    self.rxi = self.rxi.wrapping_add(1);
+                    self.set_zero(self.rxi);
+                    self.set_negative(self.rxi);
                 }
                 Instruction::INY => todo!(),
                 Instruction::JMP => todo!(),
                 Instruction::JSR => todo!(),
                 Instruction::LDA => {
                     self.lda(&instruction.addr_mode);
-                    self.instr_ptr += instruction.byte_length - 1;
                 }
                 Instruction::LDX => todo!(),
                 Instruction::LDY => todo!(),
                 Instruction::LSR => todo!(),
-                Instruction::NOP => todo!(),
+                Instruction::NOP => {}
                 Instruction::ORA => todo!(),
-                Instruction::PHA => todo!(),
-                Instruction::PHP => todo!(),
+                Instruction::PHA => {
+                    self.push_stack(self.acc);
+                }
+                Instruction::PHP => {
+                    self.push_stack(self.flags)
+                },
                 Instruction::PLA => todo!(),
                 Instruction::PLP => todo!(),
                 Instruction::ROL => todo!(),
@@ -178,6 +202,7 @@ impl CPU {
                 Instruction::TXS => todo!(),
                 Instruction::TYA => todo!(),
             }
+            self.instr_ptr += instruction.byte_length - 1; // HACK this might be broken? Dunno
         }
     }
 
@@ -195,6 +220,16 @@ impl CPU {
         } else {
             self.flags.remove(State::NEGATIVE);
         }
+    }
+
+    fn push_stack(&mut self, val: u8) {
+        self.mem[STACK_OFFSET - (self.stack_ptr as usize)] = val;
+        self.stack_ptr -= 1;
+    }
+
+    fn pop_stack(&mut self) -> u8 {
+        self.stack_ptr += 1;
+        self.mem[STACK_OFFSET - ((self.stack_ptr - 1) as usize)]
     }
 
     fn lda(&mut self, mode: &AddressingMode) {
