@@ -51,4 +51,15 @@ mod test {
 
         assert_eq!(cpu.rxi, 1)
     }
+
+    #[test]
+    fn test_lda_from_memory() {
+        let mut cpu = CPU::new();
+        cpu.write_u8(0x10, 0x55);
+
+        cpu.load(vec![0xa5, 0x10, 0x00]);
+        cpu.run();
+
+        assert_eq!(cpu.acc, 0x55);
+    }
 }

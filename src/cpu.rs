@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::instructions::*;
 use enumflags2::{bitflags, BitFlags};
 
@@ -49,11 +51,11 @@ impl CPU {
         self.instr_ptr = INIT_PTR_LOC as MemAddr;
     }
 
-    fn read_u8(&self, addr: MemAddr) -> u8 {
+    pub fn read_u8(&self, addr: MemAddr) -> u8 {
         self.mem[addr as usize]
     }
 
-    fn read_u16(&self, addr: MemAddr) -> u16 {
+    pub fn read_u16(&self, addr: MemAddr) -> u16 {
         let addr = addr as usize;
         let addr_plus_1: usize;
 
@@ -66,11 +68,11 @@ impl CPU {
         u16::from_le_bytes([self.mem[addr], self.mem[addr_plus_1]])
     }
 
-    fn write_u8(&mut self, addr: MemAddr, data: u8) {
+    pub fn write_u8(&mut self, addr: MemAddr, data: u8) {
         self.mem[addr as usize] = data;
     }
 
-    fn write_u16(&mut self, addr: MemAddr, data: u16) {
+    pub fn write_u16(&mut self, addr: MemAddr, data: u16) {
         let addr = addr as usize;
         self.mem[addr] = (data >> 8) as u8;
         self.mem[addr] = (data & 0x00FF) as u8;
@@ -82,9 +84,11 @@ impl CPU {
             Immediate => self.instr_ptr,
             ZeroPage => self.read_u8(self.instr_ptr) as u16,
             ZeroPage_X => (self.read_u8(self.instr_ptr).wrapping_add(self.rxi)) as u16,
+            ZeroPage_Y => (self.read_u8(self.instr_ptr).wrapping_add(self.ryi)) as u16,
             Absolute => self.read_u16(self.instr_ptr),
             Absolute_X => self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16),
             Absolute_Y => self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16),
+            Indirect => todo!(),
             Indirect_X => {
                 let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16);
                 self.read_u16(ptr)
@@ -93,28 +97,86 @@ impl CPU {
                 let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16);
                 self.read_u16(ptr)
             }
-            _ => panic!("Addressing Mode {:?} is not valid", mode),
+            Relative => self.instr_ptr,
+            Implied => self.instr_ptr,
+            None => panic!("Addressing Mode {:?} is not valid", mode),
         }
     }
 
     pub fn run(&mut self) {
+        let ref opcodes: HashMap<u8, OpCode> = *OPCODES_MAP;
         loop {
-            let opcode = self.read_u8(self.instr_ptr);
+            let curr_op = self.read_u8(self.instr_ptr);
             self.instr_ptr += 1;
 
-            match Instruction::try_from(opcode).unwrap() {
+            let instruction = opcodes
+                .get(&curr_op)
+                .expect(&format!("OpCode {:x} is not recognized", curr_op));
+
+            match instruction.instr {
+                Instruction::ADC => todo!(),
+                Instruction::AND => todo!(),
+                Instruction::ASL => todo!(),
+                Instruction::BCC => todo!(),
+                Instruction::BCS => todo!(),
+                Instruction::BEQ => todo!(),
+                Instruction::BIT => todo!(),
+                Instruction::BMI => todo!(),
+                Instruction::BNE => todo!(),
+                Instruction::BPL => todo!(),
                 Instruction::BRK => return,
-                Instruction::LDA => {
-                    self.acc = self.mem[self.instr_ptr as usize];
-                    self.instr_ptr += 1;
-                    self.lda(self.acc);
-                }
-                Instruction::TAX => {
-                    self.tax();
-                }
+                Instruction::BVC => todo!(),
+                Instruction::BVS => todo!(),
+                Instruction::CLC => todo!(),
+                Instruction::CLD => todo!(),
+                Instruction::CLI => todo!(),
+                Instruction::CLV => todo!(),
+                Instruction::CMP => todo!(),
+                Instruction::CPX => todo!(),
+                Instruction::CPY => todo!(),
+                Instruction::DEC => todo!(),
+                Instruction::DEX => todo!(),
+                Instruction::DEY => todo!(),
+                Instruction::EOR => todo!(),
+                Instruction::INC => todo!(),
                 Instruction::INX => {
                     self.inx();
                 }
+                Instruction::INY => todo!(),
+                Instruction::JMP => todo!(),
+                Instruction::JSR => todo!(),
+                Instruction::LDA => {
+                    self.lda(&instruction.addr_mode);
+                    self.instr_ptr += instruction.byte_length - 1;
+                }
+                Instruction::LDX => todo!(),
+                Instruction::LDY => todo!(),
+                Instruction::LSR => todo!(),
+                Instruction::NOP => todo!(),
+                Instruction::ORA => todo!(),
+                Instruction::PHA => todo!(),
+                Instruction::PHP => todo!(),
+                Instruction::PLA => todo!(),
+                Instruction::PLP => todo!(),
+                Instruction::ROL => todo!(),
+                Instruction::ROR => todo!(),
+                Instruction::RTI => todo!(),
+                Instruction::RTS => todo!(),
+                Instruction::SBC => todo!(),
+                Instruction::SEC => todo!(),
+                Instruction::SED => todo!(),
+                Instruction::SEI => todo!(),
+                Instruction::STA => todo!(),
+                Instruction::STX => todo!(),
+                Instruction::STY => todo!(),
+                Instruction::TAX => {
+                    self.tax();
+                }
+                Instruction::TAY => todo!(),
+                Instruction::TSX => todo!(),
+                Instruction::TXA => todo!(),
+                Instruction::TXS => todo!(),
+                Instruction::TYA => todo!(),
             }
         }
     }
@@ -135,7 +197,10 @@ impl CPU {
         }
     }
 
-    fn lda(&mut self, mode: AddressingMode) {
+    fn lda(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.acc = self.read_u8(addr);
+
         self.set_zero(self.acc);
         self.set_negative(self.acc);
     }
