@@ -42,7 +42,7 @@ impl CPU {
             rxi: 0,
             ryi: 0,
             flags: BitFlags::default(),
-            stack_ptr: 255,
+            stack_ptr: 0xFD,
             instr_ptr: 0, // maybe replace with std::io::Cursor?
             mem: [0; 0xFFFF],
         }
@@ -117,9 +117,9 @@ impl CPU {
 
             match instruction.instr {
                 Instruction::ADC => todo!(),
-                Instruction::AND => todo!(),
-                Instruction::ASL => todo!(),
-                Instruction::BCC => todo!(),
+                Instruction::AND => self.and(&instruction.mode),
+                Instruction::ASL => self.asl(&instruction.mode),
+                Instruction::BCC => self.bcc(),
                 Instruction::BCS => todo!(),
                 Instruction::BEQ => todo!(),
                 Instruction::BIT => todo!(),
@@ -133,7 +133,7 @@ impl CPU {
                     self.flags.remove(State::CARRY);
                 }
                 Instruction::CLD => {
-                    // this should be a NOP for actual NES games
+                    // this should be a NOP for actual NES games as they don't have decimal mode
                     self.flags.remove(State::RESERVED);
                 }
                 Instruction::CLI => {
@@ -167,7 +167,7 @@ impl CPU {
                 Instruction::JMP => todo!(),
                 Instruction::JSR => todo!(),
                 Instruction::LDA => {
-                    self.lda(&instruction.addr_mode);
+                    self.lda(&instruction.mode);
                 }
                 Instruction::LDX => todo!(),
                 Instruction::LDY => todo!(),
@@ -177,9 +177,7 @@ impl CPU {
                 Instruction::PHA => {
                     self.push_stack(self.acc);
                 }
-                Instruction::PHP => {
-                    self.push_stack(self.flags)
-                },
+                Instruction::PHP => self.push_stack(self.flags.bits() as u8),
                 Instruction::PLA => todo!(),
                 Instruction::PLP => todo!(),
                 Instruction::ROL => todo!(),
@@ -206,6 +204,8 @@ impl CPU {
         }
     }
 
+    // General Helpers
+
     fn set_zero(&mut self, val: u8) {
         if val == 0 {
             self.flags.insert(State::ZERO);
@@ -222,6 +222,14 @@ impl CPU {
         }
     }
 
+    fn set_carry(&mut self, val: u8) {
+        if val > 127 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
+    }
+
     fn push_stack(&mut self, val: u8) {
         self.mem[STACK_OFFSET - (self.stack_ptr as usize)] = val;
         self.stack_ptr -= 1;
@@ -230,6 +238,37 @@ impl CPU {
     fn pop_stack(&mut self) -> u8 {
         self.stack_ptr += 1;
         self.mem[STACK_OFFSET - ((self.stack_ptr - 1) as usize)]
+    }
+
+    // Core Instructions (alphabetical order)
+
+    fn and(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(&mode);
+        self.acc = self.acc & self.read_u8(addr);
+
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    fn asl(&mut self, mode: &AddressingMode) {
+        if *mode == AddressingMode::Implied {
+            self.set_carry(self.acc);
+            self.acc = self.acc << 1;
+        } else {
+            let addr = self.get_operand_address(&mode) as usize;
+            self.mem[addr] = self.mem[addr] << 1;
+        }
+    }
+
+    fn bcc(&mut self) {
+        if self.flags.contains(State::CARRY) {
+            let val = self.read_u8(self.instr_ptr) as i8;
+            if val > 0 {
+                self.instr_ptr += val as u16;
+            } else {
+                self.instr_ptr -= val as u16
+            }
+        }
     }
 
     fn lda(&mut self, mode: &AddressingMode) {

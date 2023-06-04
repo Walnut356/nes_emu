@@ -1,3 +1,8 @@
+// Instruction reference - https://www.nesdev.org/obelisk-6502-guide/reference.html
+// Chip wiki page - https://en.wikipedia.org/wiki/MOS_Technology_6502
+// DevDoc pdf - https://www.nesdev.org/NESDoc.pdf
+// interactive nes programming - https://skilldrick.github.io/easy6502/
+
 pub mod cpu;
 pub mod instructions;
 

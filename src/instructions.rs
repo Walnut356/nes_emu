@@ -142,7 +142,7 @@ pub enum Instruction {
 pub struct OpCode {
     pub instr: Instruction,
     pub code: u8,
-    pub addr_mode: AddressingMode,
+    pub mode: AddressingMode,
     pub byte_length: u16,
     pub cycles: u8,
 }
@@ -158,7 +158,7 @@ impl OpCode {
         OpCode {
             instr,
             code,
-            addr_mode,
+            mode: addr_mode,
             byte_length: bytes,
             cycles,
         }
@@ -192,7 +192,7 @@ lazy_static! {
         map.insert(0x31, OpCode::new(AND, 0x31, Indirect_Y, 2, 5));
 
         // ASL
-        map.insert(0x0A, OpCode::new(ASL, 0x0A, None, 1, 2));
+        map.insert(0x0A, OpCode::new(ASL, 0x0A, Implied, 1, 2));
         map.insert(0x06, OpCode::new(ASL, 0x06, ZeroPage, 2, 5));
         map.insert(0x16, OpCode::new(ASL, 0x16, ZeroPage_X, 2, 6));
         map.insert(0x0E, OpCode::new(ASL, 0x0E, Absolute, 3, 6));
