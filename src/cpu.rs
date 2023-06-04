@@ -105,6 +105,7 @@ impl CPU {
         }
     }
 
+
     pub fn run(&mut self) {
         let ref opcodes: HashMap<u8, OpCode> = *OPCODES_MAP;
         loop {
@@ -119,16 +120,40 @@ impl CPU {
                 Instruction::ADC => todo!(),
                 Instruction::AND => self.and(&instruction.mode),
                 Instruction::ASL => self.asl(&instruction.mode),
-                Instruction::BCC => self.bcc(),
-                Instruction::BCS => todo!(),
-                Instruction::BEQ => todo!(),
+                Instruction::BCC => {
+                    self.bcc();
+                    continue;
+                }
+                Instruction::BCS => {
+                    self.bcs();
+                    continue;
+                }
+                Instruction::BEQ => {
+                    self.beq();
+                    continue;
+                }
                 Instruction::BIT => todo!(),
-                Instruction::BMI => todo!(),
-                Instruction::BNE => todo!(),
-                Instruction::BPL => todo!(),
+                Instruction::BMI => {
+                    self.bmi();
+                    continue;
+                }
+                Instruction::BNE => {
+                    self.bne();
+                    continue;
+                }
+                Instruction::BPL => {
+                    self.bpl();
+                    continue;
+                }
                 Instruction::BRK => return,
-                Instruction::BVC => todo!(),
-                Instruction::BVS => todo!(),
+                Instruction::BVC => {
+                    self.bvc();
+                    continue;
+                },
+                Instruction::BVS => {
+                    self.bvs();
+                    continue;
+                }
                 Instruction::CLC => {
                     self.flags.remove(State::CARRY);
                 }
@@ -142,10 +167,10 @@ impl CPU {
                 Instruction::CLV => {
                     self.flags.remove(State::OVERFLOW);
                 }
-                Instruction::CMP => todo!(),
-                Instruction::CPX => todo!(),
-                Instruction::CPY => todo!(),
-                Instruction::DEC => todo!(),
+                Instruction::CMP => self.cmp(&instruction.mode),
+                Instruction::CPX => self.cpx(&instruction.mode),
+                Instruction::CPY => self.cpy(&instruction.mode),
+                Instruction::DEC => self.dec(&instruction.mode),
                 Instruction::DEX => {
                     self.rxi = self.rxi.wrapping_sub(1);
                     self.set_zero(self.rxi);
@@ -156,49 +181,50 @@ impl CPU {
                     self.set_zero(self.ryi);
                     self.set_negative(self.ryi);
                 }
-                Instruction::EOR => todo!(),
-                Instruction::INC => todo!(),
+                Instruction::EOR => self.eor(&instruction.mode),
+                Instruction::INC => self.inc(&instruction.mode),
                 Instruction::INX => {
                     self.rxi = self.rxi.wrapping_add(1);
                     self.set_zero(self.rxi);
                     self.set_negative(self.rxi);
                 }
-                Instruction::INY => todo!(),
-                Instruction::JMP => todo!(),
+                Instruction::INY => {
+                    self.ryi = self.ryi.wrapping_add(1);
+                    self.set_zero(self.ryi);
+                    self.set_negative(self.ryi);
+                },
+                Instruction::JMP => {
+                    self.jmp(&instruction.mode);
+                    continue;
+                },
                 Instruction::JSR => todo!(),
-                Instruction::LDA => {
-                    self.lda(&instruction.mode);
-                }
-                Instruction::LDX => todo!(),
-                Instruction::LDY => todo!(),
-                Instruction::LSR => todo!(),
-                Instruction::NOP => {}
-                Instruction::ORA => todo!(),
-                Instruction::PHA => {
-                    self.push_stack(self.acc);
-                }
+                Instruction::LDA => self.lda(&instruction.mode),
+                Instruction::LDX => self.ldx(&instruction.mode),
+                Instruction::LDY => self.ldy(&instruction.mode),
+                Instruction::LSR => self.lsr(&instruction.mode),
+                Instruction::NOP => continue,
+                Instruction::ORA => self.ora(&instruction.mode),
+                Instruction::PHA => self.push_stack(self.acc),
                 Instruction::PHP => self.push_stack(self.flags.bits() as u8),
-                Instruction::PLA => todo!(),
-                Instruction::PLP => todo!(),
+                Instruction::PLA => self.acc = self.pop_stack(),
+                Instruction::PLP => self.flags.from_bits(self.pop_stack()),
                 Instruction::ROL => todo!(),
                 Instruction::ROR => todo!(),
                 Instruction::RTI => todo!(),
                 Instruction::RTS => todo!(),
                 Instruction::SBC => todo!(),
-                Instruction::SEC => todo!(),
-                Instruction::SED => todo!(),
-                Instruction::SEI => todo!(),
+                Instruction::SEC => self.flags.insert(State::CARRY),
+                Instruction::SED => self.flags.insert(State::DECIMAL),
+                Instruction::SEI => self.flags.insert(State::INTERRUPT_DISABLE),
                 Instruction::STA => todo!(),
                 Instruction::STX => todo!(),
                 Instruction::STY => todo!(),
-                Instruction::TAX => {
-                    self.tax();
-                }
-                Instruction::TAY => todo!(),
+                Instruction::TAX => self.tax(),
+                Instruction::TAY => self.tay(),
                 Instruction::TSX => todo!(),
-                Instruction::TXA => todo!(),
+                Instruction::TXA => self.txa(),
                 Instruction::TXS => todo!(),
-                Instruction::TYA => todo!(),
+                Instruction::TYA => self.tya(),
             }
             self.instr_ptr += instruction.byte_length - 1; // HACK this might be broken? Dunno
         }
@@ -206,6 +232,7 @@ impl CPU {
 
     // General Helpers
 
+    /// Sets ZERO bitflag to 1 if argument is 0, otherwise flag is set to 0
     fn set_zero(&mut self, val: u8) {
         if val == 0 {
             self.flags.insert(State::ZERO);
@@ -214,6 +241,7 @@ impl CPU {
         }
     }
 
+    /// Sets NEGATIVE bitflag to 1 if argument is 0, otherwise flag is set to 0
     fn set_negative(&mut self, val: u8) {
         if val > 127 {
             self.flags.insert(State::NEGATIVE);
@@ -222,6 +250,7 @@ impl CPU {
         }
     }
 
+    /// Sets CARRY bitflag to 1 if argument is 0, otherwise flag is set to 0
     fn set_carry(&mut self, val: u8) {
         if val > 127 {
             self.flags.insert(State::CARRY);
@@ -230,18 +259,33 @@ impl CPU {
         }
     }
 
+    /// Puts a given byte onto the stack, decrements stack pointer by 1
     fn push_stack(&mut self, val: u8) {
         self.mem[STACK_OFFSET - (self.stack_ptr as usize)] = val;
         self.stack_ptr -= 1;
     }
 
+    /// Reads and returns the byte at the top of the stack, increments stack pointer
     fn pop_stack(&mut self) -> u8 {
         self.stack_ptr += 1;
         self.mem[STACK_OFFSET - ((self.stack_ptr - 1) as usize)]
     }
 
+    /// Used for branch instructions - reads value at instruction pointer as i8, then adds that value
+    /// to the instruction pointer
+    fn branch(&mut self) {
+        let val = self.read_u8(self.instr_ptr) as i8;
+        self.instr_ptr += 1;
+        if val > 0 {
+            self.instr_ptr += val as u16;
+        } else {
+            self.instr_ptr -= val as u16;
+        }
+    }
+
     // Core Instructions (alphabetical order)
 
+    /// Logical AND
     fn and(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(&mode);
         self.acc = self.acc & self.read_u8(addr);
@@ -250,6 +294,7 @@ impl CPU {
         self.set_negative(self.acc);
     }
 
+    /// Shift Left with Carry
     fn asl(&mut self, mode: &AddressingMode) {
         if *mode == AddressingMode::Implied {
             self.set_carry(self.acc);
@@ -260,21 +305,207 @@ impl CPU {
         }
     }
 
+    /// Branch if Carry Clear
     fn bcc(&mut self) {
-        if self.flags.contains(State::CARRY) {
-            let val = self.read_u8(self.instr_ptr) as i8;
-            if val > 0 {
-                self.instr_ptr += val as u16;
-            } else {
-                self.instr_ptr -= val as u16
-            }
+        if !self.flags.contains(State::CARRY) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
         }
     }
 
+    /// Branch if Carry Set
+    fn bcs(&mut self) {
+        if self.flags.contains(State::CARRY) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Branch if Equal
+    fn beq(&mut self) {
+        if self.flags.contains(State::ZERO) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    //fn bit
+
+    /// Branch if Less Than Zero
+    fn bmi(&mut self) {
+        if self.flags.contains(State::NEGATIVE) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Branch if Not Equal
+    fn bne(&mut self) {
+        if !self.flags.contains(State::ZERO) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Branch if Greater Than Zero
+    fn bpl(&mut self) {
+        if !self.flags.contains(State::NEGATIVE) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Branch if Overflow Clear
+    fn bvc(&mut self) {
+        if !self.flags.contains(State::OVERFLOW) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Branch if Overflow Set
+    fn bvs(&mut self) {
+        if self.flags.contains(State::OVERFLOW) {
+            self.branch();
+        } else {
+            self.instr_ptr += 1
+        }
+    }
+
+    /// Compare Acc with a value in memory
+    fn cmp(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let result = self.acc - self.read_u8(addr);
+        if result >= 0 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
+        self.set_zero(result);
+        self.set_negative(result);
+    }
+
+    /// Compare X register with a value in memory
+    fn cpx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let result = self.rxi - self.read_u8(addr);
+        if result >= 0 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
+        self.set_zero(result);
+        self.set_negative(result);
+    }
+
+    /// Compare Y register with a value in memory
+    fn cpy(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let result = self.ryi - self.read_u8(addr);
+        if result >= 0 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
+        self.set_zero(result);
+        self.set_negative(result);
+    }
+
+    /// Decrement value (wrapping) at memory location - sets flags as necessary
+    fn dec(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode) as usize;
+        self.mem[addr] = self.mem[addr] - 1;
+        self.set_zero(self.mem[addr]);
+        self.set_negative(self.mem[addr]);
+    }
+
+    /// Bitwise exclusive OR between Acc and a value in memory, stored in Acc - sets zero and negative as necessary
+    fn eor(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.acc ^= self.read_u8(addr);
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    /// Increment value (wrapping) at memory location - sets flags as necessary
+    fn dec(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode) as usize;
+        self.mem[addr] = self.mem[addr] + 1;
+        self.set_zero(self.mem[addr]);
+        self.set_negative(self.mem[addr]);
+    }
+
+    /// Unconditional Jump, sets instruction pointer to the value specified by the operand address
+    fn jmp(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.instr_ptr = self.read_u16(addr);
+    }
+
+    //jsr
+
+    /// Load Data to Acc
     fn lda(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         self.acc = self.read_u8(addr);
 
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    /// Load Data to X Register
+    fn ldx(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.rxi = self.read_u8(addr);
+
+        self.set_zero(self.rxi);
+        self.set_negative(self.rxi);
+    }
+
+    /// Load Data to Y Register
+    fn ldy(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.ryi = self.read_u8(addr);
+
+        self.set_zero(self.ryi);
+        self.set_negative(self.ryi);
+    }
+
+    /// Bitwise Shift Right - sets carry, zero, and negative flag as necessary
+    fn lsr(&mut self, mode: &AddressingMode) {
+        let result: u8;
+        if *mode == AddressingMode::Implied {
+            if self.acc & 0b0000_0001 > 0 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
+            self.acc = self.acc >> 1;
+            let result = self.acc;
+        } else {
+            let addr = self.get_operand_address(mode) as usize;
+            if self.acc & 0b0000_0001 > 0 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
+            self.mem[addr] = self.mem[addr] >> 1;
+            let result = self.mem[addr];
+        }
+        self.set_zero(result);
+        self.set_negative(result);
+    }
+
+    /// Bitwise Inclusive OR between Acc and Memory - sets zero and negative flag as necessary
+    fn ora(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.acc |= self.read_u8(addr);
         self.set_zero(self.acc);
         self.set_negative(self.acc);
     }
@@ -285,9 +516,23 @@ impl CPU {
         self.set_negative(self.rxi);
     }
 
-    fn inx(&mut self) {
-        self.rxi = self.rxi.wrapping_add(1);
-        self.set_zero(self.rxi);
-        self.set_negative(self.rxi);
+    fn tay(&mut self) {
+        self.ryi = self.acc;
+        self.set_zero(self.ryi);
+        self.set_negative(self.ryi);
+    }
+
+    fn txa(&mut self) {
+        self.acc = self.rxi;
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    //txs
+
+    fn tya(&mut self) {
+        self.acc = self.ryi;
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
     }
 }
