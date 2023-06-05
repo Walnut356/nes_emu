@@ -19,7 +19,7 @@ pub enum State {
 }
 
 const INIT_PTR_LOC: usize = 0x8000;
-const STACK_OFFSET: usize = 0x01FF;
+const STACK_MAX: usize = 0x01FF;
 const STACK_MIN: usize = 0x0100;
 
 type MemAddr = u16;
@@ -197,7 +197,10 @@ impl CPU {
                     self.jmp(&instruction.mode);
                     continue;
                 },
-                Instruction::JSR => todo!(),
+                Instruction::JSR => {
+                    self.jsr(&instruction.mode);
+                    continue;
+                }
                 Instruction::LDA => self.lda(&instruction.mode),
                 Instruction::LDX => self.ldx(&instruction.mode),
                 Instruction::LDY => self.ldy(&instruction.mode),
@@ -208,22 +211,22 @@ impl CPU {
                 Instruction::PHP => self.push_stack(self.flags.bits() as u8),
                 Instruction::PLA => self.acc = self.pop_stack(),
                 Instruction::PLP => self.flags.from_bits(self.pop_stack()),
-                Instruction::ROL => todo!(),
-                Instruction::ROR => todo!(),
-                Instruction::RTI => todo!(),
-                Instruction::RTS => todo!(),
-                Instruction::SBC => todo!(),
+                Instruction::ROL => self.rol(&instruction.mode),
+                Instruction::ROR => self.ror(&instruction.mode),
+                Instruction::RTI => self.rti(),
+                Instruction::RTS => self.rts(),
+                Instruction::SBC => self.sbc(&instruction.mode),
                 Instruction::SEC => self.flags.insert(State::CARRY),
                 Instruction::SED => self.flags.insert(State::DECIMAL),
                 Instruction::SEI => self.flags.insert(State::INTERRUPT_DISABLE),
-                Instruction::STA => todo!(),
-                Instruction::STX => todo!(),
-                Instruction::STY => todo!(),
+                Instruction::STA => self.sta(&instruction.mode),
+                Instruction::STX => self.stx(&instruction.mode),
+                Instruction::STY => self.sty(&instruction.mode),
                 Instruction::TAX => self.tax(),
                 Instruction::TAY => self.tay(),
-                Instruction::TSX => todo!(),
+                Instruction::TSX => self.rxi = self.pop_stack(),
                 Instruction::TXA => self.txa(),
-                Instruction::TXS => todo!(),
+                Instruction::TXS => self.push_stack(self.rxi),
                 Instruction::TYA => self.tya(),
             }
             self.instr_ptr += instruction.byte_length - 1; // HACK this might be broken? Dunno
@@ -261,14 +264,26 @@ impl CPU {
 
     /// Puts a given byte onto the stack, decrements stack pointer by 1
     fn push_stack(&mut self, val: u8) {
-        self.mem[STACK_OFFSET - (self.stack_ptr as usize)] = val;
-        self.stack_ptr -= 1;
+        self.write_u8((STACK_MIN as MemAddr) + self.stack_ptr, val)
+        self.stack_ptr = self.stack_ptr.wrapping_sub(1);
     }
 
     /// Reads and returns the byte at the top of the stack, increments stack pointer
     fn pop_stack(&mut self) -> u8 {
-        self.stack_ptr += 1;
-        self.mem[STACK_OFFSET - ((self.stack_ptr - 1) as usize)]
+        self.stack_ptr = self.stack_ptr.wrapping_add(1);
+        self.read_u8((STACK_MIN as MemAddr) + self.stack_ptr)
+    }
+
+    fn push_pointer(&mut self, val: MemAddr) {
+        self.push_stack((val >> 8) as u8);
+        self.push_stack((val & 0x00FF) as u8);
+    }
+
+    fn pop_pointer(&mut self) -> MemAddr {
+        let lo = self.pop_stack() as u16;
+        let ho = self.pop_stack() as u16;
+
+        (ho << 8) | lo
     }
 
     /// Used for branch instructions - reads value at instruction pointer as i8, then adds that value
@@ -284,6 +299,28 @@ impl CPU {
     }
 
     // Core Instructions (alphabetical order)
+
+    /// Add with Carry
+    fn adc(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let val = self.read_u8(addr) as u16;
+        let mut carry: u16 = 0;
+        if self.flags.contains(State::CARRY) {carry = 1};
+
+        let sum: u16 = self.acc as u16 + val + carry;
+
+        if sum > 255 {self.flags.insert(State::CARRY);}
+        else {self.flags.remove(State::CARRY);}
+
+        let result = sum as u8;
+
+        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {self.flags.insert(State::OVERFLOW);}
+        else {self.flags.remove(State::OVERFLOW);}
+
+        self.acc = result;
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
 
     /// Logical AND
     fn and(&mut self, mode: &AddressingMode) {
@@ -448,7 +485,10 @@ impl CPU {
         self.instr_ptr = self.read_u16(addr);
     }
 
-    //jsr
+    fn jsr(&mut self, mode: &AddressingMode) {
+        self.push_pointer(self.instr_ptr + 1);
+        self.instr_ptr = self.read_u16(self.instr_ptr);
+    }
 
     /// Load Data to Acc
     fn lda(&mut self, mode: &AddressingMode) {
@@ -510,26 +550,131 @@ impl CPU {
         self.set_negative(self.acc);
     }
 
+    /// Rotate left for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
+    fn rol(&mut self, mode: &AddressingMode) {
+        let mut carry = 0;
+        if self.flags.contains(State::CARRY){carry = 1}
+
+        if *mode == AddressingMode::Implied {
+            if self.acc > 127 {self.flags.insert(State::CARRY)}
+            else {self.flags.remove(State::CARRY)}
+            self.acc = self.acc << 1;
+            self.acc += carry;
+            self.set_negative(self.acc);
+            self.set_zer0(self.acc);
+        } else {
+            let addr = self.get_operand_address(mode);
+            let val = self.read_u8(addr);
+            if val > 127 {self.flags.insert(State::CARRY)}
+            else {self.flags.remove(State::CARRY)}
+            val = val << 1;
+            val += carry;
+            self.write_u8(addr, val);
+            self.set_zero(val);
+            self.set_negative(val);
+        }
+    }
+
+    /// Rotate right for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
+    fn ror(&mut self, mode: &AddressingMode) {
+        let mut carry = 0;
+        if self.flags.contains(State::CARRY){carry = 1}
+
+        if *mode == AddressingMode::Implied {
+            if self.acc >> 7 == 1 {self.flags.insert(State::CARRY)}
+            else {self.flags.remove(State::CARRY)}
+            self.acc = self.acc >> 1;
+            self.acc += carry;
+            self.set_negative(self.acc);
+            self.set_zer0(self.acc);
+        } else {
+            let addr = self.get_operand_address(mode);
+            let val = self.read_u8(addr);
+            if val >> 7 == 1 {self.flags.insert(State::CARRY)}
+            else {self.flags.remove(State::CARRY)}
+            val = val >> 1;
+            val += carry;
+            self.write_u8(addr, val);
+            self.set_zero(val);
+            self.set_negative(val);
+        }
+    }
+
+    /// Return from interupt - pulls processer flags followed by instruction pointer from stack
+    fn rti(&mut self) {
+        self.flags.from_bits(self.pop_stack());
+        self.instr_ptr = self.pop_pointer();
+    }
+
+    /// Returns to the calling routine - pulls instruction pointer from stack
+    fn rts(&mut self) {
+        self.instr_ptr = self.pop_pointer();
+    }
+
+    /// Subtract with Carry
+    fn sbc(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let mut val = self.read_u8(addr);
+        val = (val as i8).wrapping_neg().wrapping_sub(1) as u8;
+
+        let mut carry: u16 = 0;
+        if self.flags.contains(State::CARRY) {carry = 1};
+
+        let sum: u16 = self.acc as u16 + val + carry;
+
+        if sum > 255 {self.flags.insert(State::CARRY);}
+        else {self.flags.remove(State::CARRY);}
+
+        let result = sum as u8;
+
+        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {self.flags.insert(State::OVERFLOW);}
+        else {self.flags.remove(State::OVERFLOW);}
+
+        self.acc = result;
+        self.set_zero(self.acc);
+        self.set_negative(self.acc);
+    }
+
+    /// Store Acc at Memory Address
+    fn sta(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.write_u8(addr, self.acc);
+    }
+
+    /// Store X Register at Memory Address
+    fn sty(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.write_u8(addr, self.rxi);
+    }
+
+    /// Store Y register at Memory Address
+    fn sty(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        self.write_u8(addr, self.ryi);
+    }
+
+    /// Copy Acc to X Register
     fn tax(&mut self) {
         self.rxi = self.acc;
         self.set_zero(self.rxi);
         self.set_negative(self.rxi);
     }
 
+    /// Copy Acc to Y Register
     fn tay(&mut self) {
         self.ryi = self.acc;
         self.set_zero(self.ryi);
         self.set_negative(self.ryi);
     }
 
+    /// Copy X Register to Acc
     fn txa(&mut self) {
         self.acc = self.rxi;
         self.set_zero(self.acc);
         self.set_negative(self.acc);
     }
 
-    //txs
-
+    /// Copy Y Register to Acc
     fn tya(&mut self) {
         self.acc = self.ryi;
         self.set_zero(self.acc);
