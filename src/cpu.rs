@@ -49,8 +49,8 @@ impl CPU {
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
-        self.mem[INIT_PTR_LOC..INIT_PTR_LOC + program.len()].copy_from_slice(&program[..]);
-        self.instr_ptr = INIT_PTR_LOC as MemAddr;
+        self.mem[0x0600..0x0600 + program.len()].copy_from_slice(&program[..]);
+        self.write_u16(0xFFFC, 0x0600);
     }
 
     pub fn read_u8(&self, addr: MemAddr) -> u8 {
@@ -105,10 +105,18 @@ impl CPU {
         }
     }
 
-
     pub fn run(&mut self) {
+        self.run_with_callback(|_| {});
+    }
+
+    pub fn run_with_callback<F>(&mut self, mut callback: F)
+    where
+        F: FnMut(&mut CPU),
+    {
         let ref opcodes: HashMap<u8, OpCode> = *OPCODES_MAP;
         loop {
+            callback(self);
+
             let curr_op = self.read_u8(self.instr_ptr);
             self.instr_ptr += 1;
 
@@ -149,7 +157,7 @@ impl CPU {
                 Instruction::BVC => {
                     self.bvc();
                     continue;
-                },
+                }
                 Instruction::BVS => {
                     self.bvs();
                     continue;
@@ -192,11 +200,11 @@ impl CPU {
                     self.ryi = self.ryi.wrapping_add(1);
                     self.set_zero(self.ryi);
                     self.set_negative(self.ryi);
-                },
+                }
                 Instruction::JMP => {
                     self.jmp(&instruction.mode);
                     continue;
-                },
+                }
                 Instruction::JSR => {
                     self.jsr(&instruction.mode);
                     continue;
@@ -210,7 +218,9 @@ impl CPU {
                 Instruction::PHA => self.push_stack(self.acc),
                 Instruction::PHP => self.push_stack(self.flags.bits() as u8),
                 Instruction::PLA => self.acc = self.pop_stack(),
-                Instruction::PLP => self.flags.from_bits(self.pop_stack()),
+                Instruction::PLP => {
+                    self.flags = BitFlags::<State, u8>::from_bits(self.pop_stack()).unwrap()
+                }
                 Instruction::ROL => self.rol(&instruction.mode),
                 Instruction::ROR => self.ror(&instruction.mode),
                 Instruction::RTI => self.rti(),
@@ -264,14 +274,14 @@ impl CPU {
 
     /// Puts a given byte onto the stack, decrements stack pointer by 1
     fn push_stack(&mut self, val: u8) {
-        self.write_u8((STACK_MIN as MemAddr) + self.stack_ptr, val)
+        self.write_u8((STACK_MIN as MemAddr) + self.stack_ptr as u16, val);
         self.stack_ptr = self.stack_ptr.wrapping_sub(1);
     }
 
     /// Reads and returns the byte at the top of the stack, increments stack pointer
     fn pop_stack(&mut self) -> u8 {
         self.stack_ptr = self.stack_ptr.wrapping_add(1);
-        self.read_u8((STACK_MIN as MemAddr) + self.stack_ptr)
+        self.read_u8((STACK_MIN as MemAddr) + self.stack_ptr as u16)
     }
 
     fn push_pointer(&mut self, val: MemAddr) {
@@ -305,17 +315,27 @@ impl CPU {
         let addr = self.get_operand_address(mode);
         let val = self.read_u8(addr) as u16;
         let mut carry: u16 = 0;
-        if self.flags.contains(State::CARRY) {carry = 1};
+        if self.flags.contains(State::CARRY) {
+            carry = 1
+        };
 
         let sum: u16 = self.acc as u16 + val + carry;
 
-        if sum > 255 {self.flags.insert(State::CARRY);}
-        else {self.flags.remove(State::CARRY);}
+        if sum > 255 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
 
         let result = sum as u8;
 
-        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {self.flags.insert(State::OVERFLOW);}
-        else {self.flags.remove(State::OVERFLOW);}
+        let val = val as u8;
+
+        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {
+            self.flags.insert(State::OVERFLOW);
+        } else {
+            self.flags.remove(State::OVERFLOW);
+        }
 
         self.acc = result;
         self.set_zero(self.acc);
@@ -472,7 +492,7 @@ impl CPU {
     }
 
     /// Increment value (wrapping) at memory location - sets flags as necessary
-    fn dec(&mut self, mode: &AddressingMode) {
+    fn inc(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode) as usize;
         self.mem[addr] = self.mem[addr] + 1;
         self.set_zero(self.mem[addr]);
@@ -519,7 +539,7 @@ impl CPU {
 
     /// Bitwise Shift Right - sets carry, zero, and negative flag as necessary
     fn lsr(&mut self, mode: &AddressingMode) {
-        let result: u8;
+        let mut result: u8;
         if *mode == AddressingMode::Implied {
             if self.acc & 0b0000_0001 > 0 {
                 self.flags.insert(State::CARRY)
@@ -527,7 +547,7 @@ impl CPU {
                 self.flags.remove(State::CARRY)
             }
             self.acc = self.acc >> 1;
-            let result = self.acc;
+            result = self.acc;
         } else {
             let addr = self.get_operand_address(mode) as usize;
             if self.acc & 0b0000_0001 > 0 {
@@ -536,7 +556,7 @@ impl CPU {
                 self.flags.remove(State::CARRY)
             }
             self.mem[addr] = self.mem[addr] >> 1;
-            let result = self.mem[addr];
+            result = self.mem[addr];
         }
         self.set_zero(result);
         self.set_negative(result);
@@ -553,20 +573,28 @@ impl CPU {
     /// Rotate left for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
     fn rol(&mut self, mode: &AddressingMode) {
         let mut carry = 0;
-        if self.flags.contains(State::CARRY){carry = 1}
+        if self.flags.contains(State::CARRY) {
+            carry = 1
+        }
 
         if *mode == AddressingMode::Implied {
-            if self.acc > 127 {self.flags.insert(State::CARRY)}
-            else {self.flags.remove(State::CARRY)}
+            if self.acc > 127 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
             self.acc = self.acc << 1;
             self.acc += carry;
             self.set_negative(self.acc);
-            self.set_zer0(self.acc);
+            self.set_zero(self.acc);
         } else {
             let addr = self.get_operand_address(mode);
-            let val = self.read_u8(addr);
-            if val > 127 {self.flags.insert(State::CARRY)}
-            else {self.flags.remove(State::CARRY)}
+            let mut val = self.read_u8(addr);
+            if val > 127 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
             val = val << 1;
             val += carry;
             self.write_u8(addr, val);
@@ -578,20 +606,28 @@ impl CPU {
     /// Rotate right for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
     fn ror(&mut self, mode: &AddressingMode) {
         let mut carry = 0;
-        if self.flags.contains(State::CARRY){carry = 1}
+        if self.flags.contains(State::CARRY) {
+            carry = 1
+        }
 
         if *mode == AddressingMode::Implied {
-            if self.acc >> 7 == 1 {self.flags.insert(State::CARRY)}
-            else {self.flags.remove(State::CARRY)}
+            if self.acc >> 7 == 1 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
             self.acc = self.acc >> 1;
             self.acc += carry;
             self.set_negative(self.acc);
-            self.set_zer0(self.acc);
+            self.set_zero(self.acc);
         } else {
             let addr = self.get_operand_address(mode);
-            let val = self.read_u8(addr);
-            if val >> 7 == 1 {self.flags.insert(State::CARRY)}
-            else {self.flags.remove(State::CARRY)}
+            let mut val = self.read_u8(addr);
+            if val >> 7 == 1 {
+                self.flags.insert(State::CARRY)
+            } else {
+                self.flags.remove(State::CARRY)
+            }
             val = val >> 1;
             val += carry;
             self.write_u8(addr, val);
@@ -602,7 +638,7 @@ impl CPU {
 
     /// Return from interupt - pulls processer flags followed by instruction pointer from stack
     fn rti(&mut self) {
-        self.flags.from_bits(self.pop_stack());
+        self.flags = BitFlags::<State, u8>::from_bits(self.pop_stack()).unwrap();
         self.instr_ptr = self.pop_pointer();
     }
 
@@ -618,17 +654,25 @@ impl CPU {
         val = (val as i8).wrapping_neg().wrapping_sub(1) as u8;
 
         let mut carry: u16 = 0;
-        if self.flags.contains(State::CARRY) {carry = 1};
+        if self.flags.contains(State::CARRY) {
+            carry = 1
+        };
 
-        let sum: u16 = self.acc as u16 + val + carry;
+        let sum: u16 = (self.acc as u16) + (val as u16) + carry;
 
-        if sum > 255 {self.flags.insert(State::CARRY);}
-        else {self.flags.remove(State::CARRY);}
+        if sum > 255 {
+            self.flags.insert(State::CARRY);
+        } else {
+            self.flags.remove(State::CARRY);
+        }
 
         let result = sum as u8;
 
-        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {self.flags.insert(State::OVERFLOW);}
-        else {self.flags.remove(State::OVERFLOW);}
+        if (val ^ result) & (result ^ self.acc) & 0x80 != 0 {
+            self.flags.insert(State::OVERFLOW);
+        } else {
+            self.flags.remove(State::OVERFLOW);
+        }
 
         self.acc = result;
         self.set_zero(self.acc);
@@ -642,7 +686,7 @@ impl CPU {
     }
 
     /// Store X Register at Memory Address
-    fn sty(&mut self, mode: &AddressingMode) {
+    fn stx(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         self.write_u8(addr, self.rxi);
     }
