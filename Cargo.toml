@@ -10,5 +10,5 @@ num_enum = "0.6.1"
 enumflags2 = "0.7.7"
 lazy_static = "1.4.0"
 
-sdl2 = "0.34.0"
+sdl2 = {version = "0.34.0", features = ["bundled"]}
 rand = "=0.7.3"

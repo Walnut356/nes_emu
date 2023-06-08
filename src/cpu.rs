@@ -24,6 +24,25 @@ const STACK_MIN: usize = 0x0100;
 
 type MemAddr = u16;
 
+pub trait Mem {
+    fn read_u8(&self, addr: u16) -> u8;
+
+    fn write_u8(&mut self, addr: u16, data: u8);
+
+    fn read_u16(&self, pos: u16) -> u16 {
+        let lo = self.read_u8(pos) as u16;
+        let hi = self.read_u8(pos + 1) as u16;
+        (hi << 8) | (lo)
+    }
+
+    fn write_u16(&mut self, pos: u16, data: u16) {
+        let hi = (data >> 8) as u8;
+        let lo = (data & 0xff) as u8;
+        self.write_u8(pos, lo);
+        self.write_u8(pos + 1, hi);
+    }
+}
+
 pub struct CPU {
     pub acc: u8,
     pub rxi: u8,
@@ -35,13 +54,23 @@ pub struct CPU {
     pub mem: [u8; 0xFFFF],
 }
 
+impl Mem for CPU {
+    fn read_u8(&self, addr: u16) -> u8 {
+        self.mem[addr as usize]
+    }
+
+    fn write_u8(&mut self, addr: u16, data: u8) {
+        self.mem[addr as usize] = data;
+    }
+}
+
 impl CPU {
     pub fn new() -> Self {
         CPU {
             acc: 0,
             rxi: 0,
             ryi: 0,
-            flags: BitFlags::default(),
+            flags: BitFlags::<State, u8>::from_bits(0b00100100).unwrap(),
             stack_ptr: 0xFD,
             instr_ptr: 0, // maybe replace with std::io::Cursor?
             mem: [0; 0xFFFF],
@@ -53,31 +82,15 @@ impl CPU {
         self.write_u16(0xFFFC, 0x0600);
     }
 
-    pub fn read_u8(&self, addr: MemAddr) -> u8 {
-        self.mem[addr as usize]
-    }
+    pub fn reset(&mut self) {
+        self.acc = 0;
+        self.rxi = 0;
+        self.ryi = 0;
+        self.stack_ptr = 0x00FD;
+        self.flags = BitFlags::<State, u8>::from_bits(0b00100100).unwrap();
+        // self.memory = [0; 0xFFFF];
 
-    pub fn read_u16(&self, addr: MemAddr) -> u16 {
-        let addr = addr as usize;
-        let addr_plus_1: usize;
-
-        if addr < u16::MAX as usize {
-            addr_plus_1 = 0;
-        } else {
-            addr_plus_1 = addr + 1;
-        }
-
-        u16::from_le_bytes([self.mem[addr], self.mem[addr_plus_1]])
-    }
-
-    pub fn write_u8(&mut self, addr: MemAddr, data: u8) {
-        self.mem[addr as usize] = data;
-    }
-
-    pub fn write_u16(&mut self, addr: MemAddr, data: u16) {
-        let addr = addr as usize;
-        self.mem[addr] = (data >> 8) as u8;
-        self.mem[addr] = (data & 0x00FF) as u8;
+        self.instr_ptr = self.read_u16(0xFFFC);
     }
 
     fn get_operand_address(&self, mode: &AddressingMode) -> MemAddr {
@@ -90,18 +103,16 @@ impl CPU {
             Absolute => self.read_u16(self.instr_ptr),
             Absolute_X => self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16),
             Absolute_Y => self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16),
-            Indirect => todo!(),
             Indirect_X => {
-                let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.rxi as u16);
+                let ptr = self.read_u8(self.instr_ptr).wrapping_add(self.rxi) as u16;
                 self.read_u16(ptr)
             }
             Indirect_Y => {
-                let ptr = self.read_u16(self.instr_ptr).wrapping_add(self.ryi as u16);
-                self.read_u16(ptr)
+                let ptr = self.read_u8(self.instr_ptr) as u16;
+                let ptr2 = self.read_u16(ptr);
+                ptr2.wrapping_add(self.ryi as u16)
             }
-            Relative => self.instr_ptr,
-            Implied => self.instr_ptr,
-            None => panic!("Addressing Mode {:?} is not valid", mode),
+            _ => panic!("Addressing Mode {:?} is not valid", mode),
         }
     }
 
@@ -115,53 +126,28 @@ impl CPU {
     {
         let ref opcodes: HashMap<u8, OpCode> = *OPCODES_MAP;
         loop {
-            callback(self);
-
             let curr_op = self.read_u8(self.instr_ptr);
             self.instr_ptr += 1;
+            let instr_ptr_state = self.instr_ptr;
 
             let instruction = opcodes
                 .get(&curr_op)
                 .expect(&format!("OpCode {:x} is not recognized", curr_op));
 
             match instruction.instr {
-                Instruction::ADC => todo!(),
+                Instruction::ADC => self.adc(&instruction.mode),
                 Instruction::AND => self.and(&instruction.mode),
                 Instruction::ASL => self.asl(&instruction.mode),
-                Instruction::BCC => {
-                    self.bcc();
-                    continue;
-                }
-                Instruction::BCS => {
-                    self.bcs();
-                    continue;
-                }
-                Instruction::BEQ => {
-                    self.beq();
-                    continue;
-                }
-                Instruction::BIT => todo!(),
-                Instruction::BMI => {
-                    self.bmi();
-                    continue;
-                }
-                Instruction::BNE => {
-                    self.bne();
-                    continue;
-                }
-                Instruction::BPL => {
-                    self.bpl();
-                    continue;
-                }
+                Instruction::BCC => self.bcc(),
+                Instruction::BCS => self.bcs(),
+                Instruction::BEQ => self.beq(),
+                Instruction::BIT => self.bit(&instruction.mode),
+                Instruction::BMI => self.bmi(),
+                Instruction::BNE => self.bne(),
+                Instruction::BPL => self.bpl(),
                 Instruction::BRK => return,
-                Instruction::BVC => {
-                    self.bvc();
-                    continue;
-                }
-                Instruction::BVS => {
-                    self.bvs();
-                    continue;
-                }
+                Instruction::BVC => self.bvc(),
+                Instruction::BVS => self.bvs(),
                 Instruction::CLC => {
                     self.flags.remove(State::CARRY);
                 }
@@ -203,11 +189,9 @@ impl CPU {
                 }
                 Instruction::JMP => {
                     self.jmp(&instruction.mode);
-                    continue;
                 }
                 Instruction::JSR => {
                     self.jsr(&instruction.mode);
-                    continue;
                 }
                 Instruction::LDA => self.lda(&instruction.mode),
                 Instruction::LDX => self.ldx(&instruction.mode),
@@ -239,7 +223,11 @@ impl CPU {
                 Instruction::TXS => self.push_stack(self.rxi),
                 Instruction::TYA => self.tya(),
             }
-            self.instr_ptr += instruction.byte_length - 1; // HACK this might be broken? Dunno
+            if instr_ptr_state == self.instr_ptr {
+                self.instr_ptr += instruction.byte_length - 1;
+            }
+
+            callback(self);
         }
     }
 
@@ -254,7 +242,7 @@ impl CPU {
         }
     }
 
-    /// Sets NEGATIVE bitflag to 1 if argument is 0, otherwise flag is set to 0
+    /// Sets NEGATIVE bitflag to 1 if argument has bit 7 set, otherwise flag is set to 0
     fn set_negative(&mut self, val: u8) {
         if val > 127 {
             self.flags.insert(State::NEGATIVE);
@@ -263,7 +251,7 @@ impl CPU {
         }
     }
 
-    /// Sets CARRY bitflag to 1 if argument is 0, otherwise flag is set to 0
+    /// Sets CARRY bitflag to 1 if argument has bit 7 set, otherwise flag is set to 0
     fn set_carry(&mut self, val: u8) {
         if val > 127 {
             self.flags.insert(State::CARRY);
@@ -300,12 +288,8 @@ impl CPU {
     /// to the instruction pointer
     fn branch(&mut self) {
         let val = self.read_u8(self.instr_ptr) as i8;
-        self.instr_ptr += 1;
-        if val > 0 {
-            self.instr_ptr += val as u16;
-        } else {
-            self.instr_ptr -= val as u16;
-        }
+        let jump_addr = self.instr_ptr.wrapping_add(1).wrapping_add(val as u16);
+        self.instr_ptr = jump_addr;
     }
 
     // Core Instructions (alphabetical order)
@@ -314,6 +298,7 @@ impl CPU {
     fn adc(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let val = self.read_u8(addr) as u16;
+
         let mut carry: u16 = 0;
         if self.flags.contains(State::CARRY) {
             carry = 1
@@ -345,8 +330,8 @@ impl CPU {
     /// Logical AND
     fn and(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(&mode);
-        self.acc = self.acc & self.read_u8(addr);
 
+        self.acc = self.acc & self.read_u8(addr);
         self.set_zero(self.acc);
         self.set_negative(self.acc);
     }
@@ -356,9 +341,13 @@ impl CPU {
         if *mode == AddressingMode::Implied {
             self.set_carry(self.acc);
             self.acc = self.acc << 1;
+            self.set_zero(self.acc);
+            self.set_negative(self.acc);
         } else {
             let addr = self.get_operand_address(&mode) as usize;
-            self.mem[addr] = self.mem[addr] << 1;
+            self.write_u8(addr as u16, self.mem[addr] << 1);
+            self.set_zero(self.mem[addr]);
+            self.set_negative(self.mem[addr]);
         }
     }
 
@@ -366,8 +355,6 @@ impl CPU {
     fn bcc(&mut self) {
         if !self.flags.contains(State::CARRY) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -375,8 +362,6 @@ impl CPU {
     fn bcs(&mut self) {
         if self.flags.contains(State::CARRY) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -384,19 +369,27 @@ impl CPU {
     fn beq(&mut self) {
         if self.flags.contains(State::ZERO) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
-    //fn bit
+    /// Bit Test A is ANDed with the value in memory to set or clear the zero flag, but the result is not kept.
+    /// Bits 7 and 6 of the value from memory are copied into the N and V flags.
+    fn bit(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let val = self.acc & self.read_u8(addr);
+        self.set_zero(val);
+        self.set_negative(val);
+        if val & 0b01000000 > 0 {
+            self.flags.insert(State::OVERFLOW);
+        } else {
+            self.flags.remove(State::OVERFLOW);
+        };
+    }
 
     /// Branch if Less Than Zero
     fn bmi(&mut self) {
         if self.flags.contains(State::NEGATIVE) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -404,8 +397,6 @@ impl CPU {
     fn bne(&mut self) {
         if !self.flags.contains(State::ZERO) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -413,8 +404,6 @@ impl CPU {
     fn bpl(&mut self) {
         if !self.flags.contains(State::NEGATIVE) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -422,8 +411,6 @@ impl CPU {
     fn bvc(&mut self) {
         if !self.flags.contains(State::OVERFLOW) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
@@ -431,16 +418,15 @@ impl CPU {
     fn bvs(&mut self) {
         if self.flags.contains(State::OVERFLOW) {
             self.branch();
-        } else {
-            self.instr_ptr += 1
         }
     }
 
     /// Compare Acc with a value in memory
     fn cmp(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
-        let result = self.acc - self.read_u8(addr);
-        if result >= 0 {
+        let val = self.read_u8(addr);
+        let result = self.acc.wrapping_sub(val);
+        if val <= self.acc {
             self.flags.insert(State::CARRY);
         } else {
             self.flags.remove(State::CARRY);
@@ -452,8 +438,9 @@ impl CPU {
     /// Compare X register with a value in memory
     fn cpx(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
-        let result = self.rxi - self.read_u8(addr);
-        if result >= 0 {
+        let val = self.read_u8(addr);
+        let result = self.rxi.wrapping_sub(val);
+        if val <= self.rxi {
             self.flags.insert(State::CARRY);
         } else {
             self.flags.remove(State::CARRY);
@@ -465,8 +452,9 @@ impl CPU {
     /// Compare Y register with a value in memory
     fn cpy(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
-        let result = self.ryi - self.read_u8(addr);
-        if result >= 0 {
+        let val = self.read_u8(addr);
+        let result = self.ryi.wrapping_sub(val);
+        if val <= self.ryi {
             self.flags.insert(State::CARRY);
         } else {
             self.flags.remove(State::CARRY);
@@ -477,10 +465,11 @@ impl CPU {
 
     /// Decrement value (wrapping) at memory location - sets flags as necessary
     fn dec(&mut self, mode: &AddressingMode) {
-        let addr = self.get_operand_address(mode) as usize;
-        self.mem[addr] = self.mem[addr] - 1;
-        self.set_zero(self.mem[addr]);
-        self.set_negative(self.mem[addr]);
+        let addr = self.get_operand_address(mode);
+        let val = self.read_u8(addr).wrapping_sub(1);
+        self.write_u8(addr, val);
+        self.set_zero(val);
+        self.set_negative(val);
     }
 
     /// Bitwise exclusive OR between Acc and a value in memory, stored in Acc - sets zero and negative as necessary
@@ -493,16 +482,34 @@ impl CPU {
 
     /// Increment value (wrapping) at memory location - sets flags as necessary
     fn inc(&mut self, mode: &AddressingMode) {
-        let addr = self.get_operand_address(mode) as usize;
-        self.mem[addr] = self.mem[addr] + 1;
-        self.set_zero(self.mem[addr]);
-        self.set_negative(self.mem[addr]);
+        let addr = self.get_operand_address(mode);
+        let val = self.read_u8(addr).wrapping_add(1);
+        self.write_u8(addr, val);
+        self.set_zero(val);
+        self.set_negative(val);
     }
 
     /// Unconditional Jump, sets instruction pointer to the value specified by the operand address
     fn jmp(&mut self, mode: &AddressingMode) {
-        let addr = self.get_operand_address(mode);
-        self.instr_ptr = self.read_u16(addr);
+        if *mode == AddressingMode::Absolute {
+            self.instr_ptr = self.get_operand_address(mode);
+        } else {
+            let addr = self.get_operand_address(mode);
+            //6502 bug mode with with page boundary:
+            //  if address $3000 contains $40, $30FF contains $80, and $3100 contains $50,
+            // the result of JMP ($30FF) will be a transfer of control to $4080 rather than $5080 as you intended
+            // i.e. the 6502 took the low byte of the address from $30FF and the high byte from $3000
+
+            let indirect_ref = if addr & 0x00FF == 0x00FF {
+                let lo = self.read_u8(addr);
+                let hi = self.read_u8(addr & 0xFF00);
+                (hi as u16) << 8 | (lo as u16)
+            } else {
+                self.read_u16(addr)
+            };
+
+            self.instr_ptr = indirect_ref;
+        }
     }
 
     fn jsr(&mut self, mode: &AddressingMode) {
@@ -541,7 +548,7 @@ impl CPU {
     fn lsr(&mut self, mode: &AddressingMode) {
         let mut result: u8;
         if *mode == AddressingMode::Implied {
-            if self.acc & 0b0000_0001 > 0 {
+            if self.acc & 1 == 1 {
                 self.flags.insert(State::CARRY)
             } else {
                 self.flags.remove(State::CARRY)
@@ -549,14 +556,15 @@ impl CPU {
             self.acc = self.acc >> 1;
             result = self.acc;
         } else {
-            let addr = self.get_operand_address(mode) as usize;
-            if self.acc & 0b0000_0001 > 0 {
+            let addr = self.get_operand_address(mode);
+            let val = self.read_u8(addr);
+            if self.acc & 1 == 1 {
                 self.flags.insert(State::CARRY)
             } else {
                 self.flags.remove(State::CARRY)
             }
-            self.mem[addr] = self.mem[addr] >> 1;
-            result = self.mem[addr];
+            self.write_u8(addr, val >> 1);
+            result = val >> 1;
         }
         self.set_zero(result);
         self.set_negative(result);
@@ -572,10 +580,7 @@ impl CPU {
 
     /// Rotate left for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
     fn rol(&mut self, mode: &AddressingMode) {
-        let mut carry = 0;
-        if self.flags.contains(State::CARRY) {
-            carry = 1
-        }
+        let carry = self.flags.contains(State::CARRY);
 
         if *mode == AddressingMode::Implied {
             if self.acc > 127 {
@@ -584,7 +589,9 @@ impl CPU {
                 self.flags.remove(State::CARRY)
             }
             self.acc = self.acc << 1;
-            self.acc += carry;
+            if carry {
+                self.acc |= 1;
+            }
             self.set_negative(self.acc);
             self.set_zero(self.acc);
         } else {
@@ -596,40 +603,43 @@ impl CPU {
                 self.flags.remove(State::CARRY)
             }
             val = val << 1;
-            val += carry;
+            if carry {
+                val |= 1;
+            }
             self.write_u8(addr, val);
-            self.set_zero(val);
+
             self.set_negative(val);
         }
     }
 
     /// Rotate right for Acc or Memory Address, using existing carry - sets zero, negative, and carry flag as necessary
     fn ror(&mut self, mode: &AddressingMode) {
-        let mut carry = 0;
-        if self.flags.contains(State::CARRY) {
-            carry = 1
-        }
+        let carry = self.flags.contains(State::CARRY);
 
         if *mode == AddressingMode::Implied {
-            if self.acc >> 7 == 1 {
+            if self.acc & 1 == 1 {
                 self.flags.insert(State::CARRY)
             } else {
                 self.flags.remove(State::CARRY)
             }
             self.acc = self.acc >> 1;
-            self.acc += carry;
+            if carry {
+                self.acc |= 128;
+            }
             self.set_negative(self.acc);
             self.set_zero(self.acc);
         } else {
             let addr = self.get_operand_address(mode);
             let mut val = self.read_u8(addr);
-            if val >> 7 == 1 {
+            if val & 1 == 1 {
                 self.flags.insert(State::CARRY)
             } else {
                 self.flags.remove(State::CARRY)
             }
             val = val >> 1;
-            val += carry;
+            if carry {
+                val |= 128;
+            }
             self.write_u8(addr, val);
             self.set_zero(val);
             self.set_negative(val);
@@ -639,12 +649,15 @@ impl CPU {
     /// Return from interupt - pulls processer flags followed by instruction pointer from stack
     fn rti(&mut self) {
         self.flags = BitFlags::<State, u8>::from_bits(self.pop_stack()).unwrap();
+        self.flags.remove(State::BREAK);
+        self.flags.insert(State::RESERVED);
+
         self.instr_ptr = self.pop_pointer();
     }
 
     /// Returns to the calling routine - pulls instruction pointer from stack
     fn rts(&mut self) {
-        self.instr_ptr = self.pop_pointer();
+        self.instr_ptr = self.pop_pointer() + 1;
     }
 
     /// Subtract with Carry
@@ -655,7 +668,7 @@ impl CPU {
 
         let mut carry: u16 = 0;
         if self.flags.contains(State::CARRY) {
-            carry = 1
+            carry = 1;
         };
 
         let sum: u16 = (self.acc as u16) + (val as u16) + carry;

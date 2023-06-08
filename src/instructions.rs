@@ -205,7 +205,7 @@ lazy_static! {
         map.insert(0xB0, OpCode::new(BCS, 0xB0, Relative, 2, 2));
 
         // BEQ
-        map.insert(0xF0, OpCode::new(BCS, 0xF0, Relative, 2, 2));
+        map.insert(0xF0, OpCode::new(BEQ, 0xF0, Relative, 2, 2));
 
         // BIT
         map.insert(0x24, OpCode::new(BIT, 0x24, ZeroPage, 2, 3));
